@@ -15,32 +15,35 @@ if not api_key:
 url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 class Attachment(BaseModel):
-    name: str
-    url: str
+    url: str  # Only store the URL string
 
 
-def generate_app_code(brief: str, attachments: List[Attachment] = None) -> Dict[str, str]:
+def generate_app_code(brief: str, attachments: List[str] = None) -> Dict[str, str]:
     """
     Generate a working single-page web app and README.md using Gemini API.
     
     Args:
         brief: The app brief/requirements
-        attachments: Optional list of attachments with name and url
-    
-    Returns:
-        Dictionary with filename: content pairs (index.html, README.md)
+        attachments: Optional list of attachment URLs
     """
-
+    
     # Build attachment info if provided
     attachment_info = ""
     if attachments:
         attachment_info = "\n\nAttachments to consider:\n"
-        for att in attachments:
-            attachment_info += f"- {att.name}: {att.url}\n"
+        for i, url in enumerate(attachments, 1):
+            # Extract file type from data URL
+            file_type = url.split(';')[0].split(':')[1] if ';' in url else 'unknown'
+            attachment_info += f"- Attachment {i} ({file_type}): [base64 data provided]\n"
 
+    # API endpoint should be constant
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+
+    # Rest of your prompt construction
     prompt_text = (
         "You are a professional front-end engineer. "
         "Generate ONLY the final code outputs — no reasoning, markdown wrappers, or commentary. "
+        "For base64 image/file URLs, use the FULL provided base64 string, not the truncated version. "
         "Produce exactly two files:\n"
         "1. index.html (fully functional, responsive, inline CSS/JS, no external imports)\n"
         "2. README.md (concise project summary + MIT License)\n\n"
@@ -64,9 +67,15 @@ def generate_app_code(brief: str, attachments: List[Attachment] = None) -> Dict[
         ]
     }
 
+    # Make the API request
     try:
         print("📡 Calling Gemini API...")
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        response = requests.post(
+            url,  # Use the Gemini API URL here
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
         response.raise_for_status()
         print("✅ Gemini API response received")
     except requests.exceptions.Timeout:
