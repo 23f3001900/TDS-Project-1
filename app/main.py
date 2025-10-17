@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
-from app.schemas import BuildRequest
-from app.github_utils import create_or_update_repo
-from app.llm_generator import generate_app_code
+from schemas import BuildRequest
+from github_utils import create_or_update_repo
+from llm_generator import generate_app_code
 import requests
 import os
 import time
