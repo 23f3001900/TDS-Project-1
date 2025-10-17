@@ -11,4 +11,4 @@ class BuildRequest(BaseModel):
     brief: str
     evaluation_url: str
     attachments: List[str] = []
-    repo_url: Optional[str] = None   # ✅ add this line for round 2
+    repo_url: Optional[str] = None

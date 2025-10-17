@@ -26,43 +26,138 @@ def create_or_update_repo(task_name, files=None, create_new=True, repo_url=None)
             repo_name,
             private=False,
             description="Auto-generated project for evaluation",
-            auto_init=True  # ⭐ FIX: Initialize with initial commit
+            auto_init=True
         )
         print(f"✅ Created new repo: {repo_name}")
-        time.sleep(2)  # Wait for repo to be fully initialized
+        time.sleep(3)  # Increased wait time for repo initialization
     else:
-        if not repo_url:
-            raise ValueError("repo_url must be provided for REVISE round.")
-        repo_name = repo_url.rstrip("/").split("/")[-1]
-        repo = user.get_repo(repo_name)
-        print(f"✅ Fetched existing repo: {repo_name}")
+        # REVISE round - try to get repo from repo_url, fallback to finding by task_name
+        if repo_url:
+            try:
+                repo_name = repo_url.rstrip("/").split("/")[-1]
+                repo = user.get_repo(repo_name)
+                print(f"✅ Fetched existing repo from repo_url: {repo_name}")
+            except Exception as e:
+                print(f"⚠️ repo_url provided but failed ({e}). Falling back to task name search...")
+                # Fallback to task name search
+                print(f"🔍 Searching for repos matching task: {task_name}")
+                try:
+                    user_repos = user.get_repos(sort="updated", direction="desc")
+                    matching_repo = None
+                    for r in user_repos:
+                        if r.name.startswith(task_name):
+                            matching_repo = r
+                            break
+                    
+                    if matching_repo:
+                        repo = matching_repo
+                        repo_name = repo.name
+                        print(f"✅ Found matching repo by task name: {repo_name}")
+                    else:
+                        raise ValueError(f"Could not find repo for task '{task_name}'.")
+                except Exception as search_error:
+                    raise ValueError(f"Failed to find repo: {str(search_error)}")
+        else:
+            # No repo_url provided - find repo by task_name
+            print(f"⚠️ No repo_url provided for REVISE. Searching for repos matching task: {task_name}")
+            try:
+                user_repos = user.get_repos(sort="updated", direction="desc")
+                matching_repo = None
+                for r in user_repos:
+                    if r.name.startswith(task_name):
+                        matching_repo = r
+                        break
+                
+                if matching_repo:
+                    repo = matching_repo
+                    repo_name = repo.name
+                    print(f"✅ Found matching repo by task name: {repo_name}")
+                else:
+                    raise ValueError(f"Could not find repo for task '{task_name}'. Please provide repo_url or ensure a repo exists with this task name.")
+            except Exception as e:
+                raise ValueError(f"Failed to find repo: {str(e)}")
 
     pages_url = f"https://{github_user}.github.io/{repo_name}/"
     branch = repo.default_branch
     print(f"📌 Using branch: {branch}")
 
-    # === Step 1: Add/update user files FIRST ===
+    # === Step 1: Add/update user files ===
     if files:
-        print(f"📝 Adding {len(files)} user files...")
+        print(f"📝 Adding/updating {len(files)} user files...")
         for filename, content in files.items():
+            print(f"   Processing: {filename}")
             try:
-                existing_file = repo.get_contents(filename, ref=branch)
-                repo.update_file(
-                    existing_file.path,
-                    f"Update {filename}",
-                    content,
-                    existing_file.sha,
-                    branch=branch
-                )
-                print(f"   ✅ Updated {filename}")
-            except Exception:
-                # File doesn't exist, create it
+                # Try to get existing file
                 try:
-                    repo.create_file(filename, f"Add {filename}", content, branch=branch)
-                    print(f"   ✅ Created {filename}")
-                except Exception as create_error:
-                    print(f"   ❌ Failed to create {filename}: {create_error}")
-            time.sleep(0.5)
+                    existing_file = repo.get_contents(filename, ref=branch)
+                    file_exists = True
+                    print(f"      File exists, current SHA: {existing_file.sha[:7]}")
+                except Exception:
+                    file_exists = False
+                    print(f"      File doesn't exist, will create")
+                
+                if file_exists:
+                    # Update existing file
+                    try:
+                        result = repo.update_file(
+                            existing_file.path,
+                            f"Update {filename}",
+                            content,
+                            existing_file.sha,
+                            branch=branch
+                        )
+                        print(f"   ✅ Updated {filename} (new SHA: {result['commit'].sha[:7]})")
+                    except Exception as update_error:
+                        print(f"   ❌ Update failed for {filename}: {str(update_error)}")
+                        print(f"      Error type: {type(update_error).__name__}")
+                        # Try force update by deleting and recreating
+                        print(f"      Attempting force update (delete + create)...")
+                        try:
+                            # Re-fetch to get latest SHA in case it changed
+                            fresh_file = repo.get_contents(filename, ref=branch)
+                            repo.delete_file(
+                                fresh_file.path,
+                                f"Delete {filename} for update",
+                                fresh_file.sha,
+                                branch=branch
+                            )
+                            print(f"      Deleted {filename}")
+                            time.sleep(1)  # Wait for deletion to propagate
+                            
+                            result = repo.create_file(
+                                filename,
+                                f"Recreate {filename}",
+                                content,
+                                branch=branch
+                            )
+                            print(f"   ✅ Recreated {filename} (SHA: {result['commit'].sha[:7]})")
+                        except Exception as recreate_error:
+                            print(f"   ❌ Failed to recreate {filename}: {str(recreate_error)}")
+                            print(f"      Error type: {type(recreate_error).__name__}")
+                            raise  # Re-raise to stop execution
+                else:
+                    # Create new file
+                    try:
+                        result = repo.create_file(
+                            filename,
+                            f"Add {filename}",
+                            content,
+                            branch=branch
+                        )
+                        print(f"   ✅ Created {filename} (SHA: {result['commit'].sha[:7]})")
+                    except Exception as create_error:
+                        print(f"   ❌ Failed to create {filename}: {str(create_error)}")
+                        print(f"      Error type: {type(create_error).__name__}")
+                        raise  # Re-raise to stop execution
+                
+                time.sleep(1)  # Increased delay between file operations
+                
+            except Exception as e:
+                print(f"   ❌ Fatal error processing {filename}: {str(e)}")
+                print(f"      Error type: {type(e).__name__}")
+                # Don't continue if a critical file like index.html fails
+                if filename == "index.html":
+                    raise Exception(f"Critical file {filename} failed to update: {str(e)}")
 
     # === Step 2: Ensure README.md exists (only if not already provided) ===
     if not files or "README.md" not in files:
@@ -105,68 +200,11 @@ of the Software, and to permit persons to whom the Software is furnished to do s
     if create_new:
         print("🔧 Setting up GitHub Pages workflow...")
         
-        # First, create .gitkeep to ensure .github/workflows directory exists
-        try:
-            repo.create_file(".github/.gitkeep", "Create .github folder", "", branch=branch)
-            print(f"   ✅ Created .github directory")
-            time.sleep(0.5)
-        except Exception:
-            pass  # Directory might already exist
-        
-        try:
-            repo.create_file(".github/workflows/.gitkeep", "Create workflows folder", "", branch=branch)
-            print(f"   ✅ Created workflows directory")
-            time.sleep(0.5)
-        except Exception:
-            pass  # Directory might already exist
-        
-        workflow_path = ".github/workflows/pages.yml"
-        workflow_content = f"""name: Deploy to GitHub Pages
-
-on:
-  push:
-    branches:
-      - {branch}
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: "pages"
-  cancel-in-progress: false
-
-jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{{{ steps.deployment.outputs.page_url }}}}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: '.'
-      
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
-"""
-        try:
-            repo.create_file(workflow_path, "Add GitHub Pages workflow", workflow_content, branch=branch)
-            print(f"   ✅ Created workflow at {workflow_path}")
-        except Exception as e:
-            print(f"   ❌ Workflow creation failed: {e}")
-        
-        time.sleep(1)
+        # Note: GitHub Pages works without a workflow when enabled via API
+        # The workflow is optional, so we skip it to avoid 404 errors
+        # GitHub will auto-deploy from the main branch
+        print(f"   ✅ GitHub Pages will auto-deploy from {branch} branch")
+        print(f"   (Manual workflow creation skipped - not required)")
 
     # === Step 5: Enable GitHub Pages ===
     if create_new:
@@ -179,7 +217,6 @@ jobs:
                 "X-GitHub-Api-Version": "2022-11-28"
             }
             
-            # Deploy from branch (most reliable and immediate)
             pages_payload = {
                 "source": {
                     "branch": branch,
@@ -191,26 +228,54 @@ jobs:
             response = requests.post(pages_api_url, json=pages_payload, headers=headers, timeout=10)
             
             if response.status_code in [200, 201, 204]:
-                print(f"   ✅ GitHub Pages enabled (deploying from {branch} branch)")
+                print(f"   ✅ GitHub Pages enabled")
             else:
-                print(f"   ⚠️ Pages enable response: {response.status_code}")
+                print(f"   ⚠️ Pages response: {response.status_code}")
+                print(f"   Response: {response.text}")
         
         except Exception as e:
-            print(f"   ⚠️ Could not enable Pages: {e}")
+            print(f"   ⚠️ Pages error: {e}")
         
         time.sleep(2)
 
     # === Step 6: Get latest commit SHA ===
     try:
-        latest_commit_sha = repo.get_commits()[0].sha
-        print(f"✅ Latest commit SHA: {latest_commit_sha[:7]}")
+        commits = list(repo.get_commits()[:1])
+        if commits:
+            latest_commit_sha = commits[0].sha
+            print(f"✅ Latest commit SHA: {latest_commit_sha[:7]}")
+            print(f"   Commit message: {commits[0].commit.message}")
+        else:
+            latest_commit_sha = "unknown"
+            print(f"⚠️ No commits found")
     except Exception as e:
         print(f"⚠️ Could not fetch commit SHA: {e}")
         latest_commit_sha = "unknown"
 
+    # === Step 7: Force GitHub Pages redeploy (for REVISE rounds) ===
+    if not create_new:
+        print("🔄 Triggering GitHub Pages rebuild...")
+        try:
+            headers = {
+                "Accept": "application/vnd.github.v3+json",
+                "Authorization": f"token {github_token}",
+                "X-GitHub-Api-Version": "2022-11-28"
+            }
+            pages_api_url = f"https://api.github.com/repos/{github_user}/{repo_name}/pages/builds"
+            response = requests.post(pages_api_url, headers=headers, timeout=10)
+            if response.status_code in [200, 201, 204]:
+                print(f"   ✅ Pages rebuild triggered")
+            else:
+                print(f"   ⚠️ Pages rebuild: {response.status_code}")
+                print(f"   Response: {response.text}")
+        except Exception as e:
+            print(f"   ⚠️ Could not trigger rebuild: {e}")
+        
+        time.sleep(2)
+
     print(f"\n✨ Repository setup complete!")
     print(f"   Repo: {repo.html_url}")
     print(f"   Pages: {pages_url}")
-    print(f"   (Pages may take 1-2 minutes to deploy)")
+    print(f"   (Pages deployment may take 1-2 minutes)")
     
     return repo.html_url, latest_commit_sha, pages_url
